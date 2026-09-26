@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
 
 jobs:
+
   test-firebase:
+
     runs-on: ubuntu-latest
 
     steps:
@@ -12,6 +14,7 @@ jobs:
       # ==========================================
       # Step 1 - Checkout repository
       # ==========================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -19,8 +22,10 @@ jobs:
       # ==========================================
       # Step 2 - Setup Node.js
       # ==========================================
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
+
         with:
           node-version: 22
 
@@ -28,18 +33,25 @@ jobs:
       # ==========================================
       # Step 3 - Install Firebase Admin SDK
       # ==========================================
+
       - name: Install Firebase Admin SDK
         run: |
+
           npm init -y
+
           npm install firebase-admin
 
 
       # ==========================================
       # Step 4 - Test Firebase Realtime Database
       # ==========================================
+
       - name: Test Firebase Realtime Database
+
         env:
+
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+
         run: |
 
           cat > test-firebase.js <<'EOF'
@@ -49,10 +61,15 @@ jobs:
             cert
           } = require("firebase-admin/app");
 
+
           const {
             getDatabase
           } = require("firebase-admin/database");
 
+
+          // ==========================================
+          // Firebase Database URL
+          // ==========================================
 
           const DATABASE_URL =
             "https://edistrict-status-test-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -71,294 +88,322 @@ jobs:
           );
 
 
-          // ------------------------------------------
-          // Check Secret
-          // ------------------------------------------
+          // ==========================================
+          // Main Function
+          // ==========================================
 
-          if (
-            !process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-          ) {
+          async function main() {
 
-            console.error(
-              "ERROR: Firebase service account secret is missing."
-            );
+            // ------------------------------------------
+            // Check Secret
+            // ------------------------------------------
 
-            process.exit(1);
-          }
+            if (
+              !process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+            ) {
 
-
-          console.log(
-            "Firebase service account secret detected."
-          );
-
-
-          // ------------------------------------------
-          // Parse Service Account
-          // ------------------------------------------
-
-          let serviceAccount;
-
-          try {
-
-            serviceAccount =
-              JSON.parse(
-                process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+              throw new Error(
+                "Firebase service account secret is missing."
               );
+            }
 
-          } catch (error) {
 
-            console.error(
-              "ERROR: Firebase service account JSON is invalid."
+            console.log(
+              "Firebase service account secret detected."
             );
 
-            process.exit(1);
-          }
+
+            // ------------------------------------------
+            // Parse Service Account
+            // ------------------------------------------
+
+            let serviceAccount;
 
 
-          // ------------------------------------------
-          // Initialize Firebase Admin
-          // ------------------------------------------
+            try {
 
-          try {
+              serviceAccount =
+                JSON.parse(
+                  process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+                );
+
+            } catch (error) {
+
+              throw new Error(
+                "Firebase service account JSON is invalid."
+              );
+            }
+
+
+            // ------------------------------------------
+            // Initialize Firebase Admin
+            // ------------------------------------------
 
             initializeApp({
+
               credential:
                 cert(serviceAccount),
 
               databaseURL:
                 DATABASE_URL
+
             });
 
-          } catch (error) {
 
-            console.error(
-              "ERROR: Firebase Admin initialization failed."
+            console.log(
+              "Firebase Admin initialized successfully."
             );
 
-            console.error(
-              error.message
+
+            console.log(
+              "Database URL:"
             );
 
-            process.exit(1);
-          }
+
+            console.log(
+              DATABASE_URL
+            );
 
 
-          console.log(
-            "Firebase Admin initialized successfully."
-          );
+            // ------------------------------------------
+            // Get Database
+            // ------------------------------------------
+
+            const db =
+              getDatabase();
 
 
-          console.log(
-            "Database URL:"
-          );
+            // ------------------------------------------
+            // Read Users
+            // ------------------------------------------
 
-          console.log(
-            DATABASE_URL
-          );
-
-
-          // ------------------------------------------
-          // Read Firebase Database
-          // ------------------------------------------
-
-          async function testDatabase() {
-
-            try {
-
-              const db =
-                getDatabase();
+            const snapshot =
+              await db
+                .ref("users")
+                .once("value");
 
 
-              const snapshot =
-                await db
-                  .ref("users")
-                  .once("value");
+            console.log(
+              "=========================================="
+            );
+
+
+            console.log(
+              "Firebase Database connection SUCCESS"
+            );
+
+
+            console.log(
+              "=========================================="
+            );
+
+
+            // ------------------------------------------
+            // Check Data
+            // ------------------------------------------
+
+            if (!snapshot.exists()) {
+
+              console.log(
+                "No users found in Firebase Database."
+              );
+
+              return;
+            }
+
+
+            const users =
+              snapshot.val();
+
+
+            const userIds =
+              Object.keys(users);
+
+
+            console.log(
+              "Users found: "
+                + userIds.length
+            );
+
+
+            // ------------------------------------------
+            // Read Applications
+            // ------------------------------------------
+
+            for (
+              const uid of userIds
+            ) {
+
+              console.log(
+                "------------------------------------------"
+              );
 
 
               console.log(
-                "=========================================="
-              );
-
-              console.log(
-                "Firebase Database connection SUCCESS"
-              );
-
-              console.log(
-                "=========================================="
+                "User UID: "
+                  + uid
               );
 
 
-              if (!snapshot.exists()) {
-
-                console.log(
-                  "No users found in Firebase Database."
-                );
-
-                return;
-              }
+              const user =
+                users[uid];
 
 
-              const users =
-                snapshot.val();
-
-
-              const userIds =
-                Object.keys(users);
-
-
-              console.log(
-                "Users found: "
-                  + userIds.length
-              );
-
-
-              for (
-                const uid of userIds
+              if (
+                user.applications
               ) {
 
+                const applicationIds =
+                  Object.keys(
+                    user.applications
+                  );
+
+
                 console.log(
-                  "------------------------------------------"
+                  "Applications: "
+                    + applicationIds.length
                 );
 
-                console.log(
-                  "User UID: "
-                    + uid
-                );
 
-
-                const user =
-                  users[uid];
-
-
-                if (
-                  user.applications
+                for (
+                  const applicationId
+                  of applicationIds
                 ) {
 
-                  const applicationIds =
-                    Object.keys(
-                      user.applications
-                    );
+                  const application =
+                    user.applications[
+                      applicationId
+                    ];
 
 
                   console.log(
-                    "Applications: "
-                      + applicationIds.length
+                    "Application: "
+                      + (
+                        application.applicationNumber
+                        || applicationId
+                      )
                   );
 
-
-                  for (
-                    const applicationId
-                    of applicationIds
-                  ) {
-
-                    const application =
-                      user.applications[
-                        applicationId
-                      ];
-
-
-                    console.log(
-                      "Application: "
-                        + (
-                          application.applicationNumber
-                          || applicationId
-                        )
-                    );
-
-
-                    console.log(
-                      "Applicant: "
-                        + (
-                          application.applicantName
-                          || "-"
-                        )
-                    );
-
-
-                    console.log(
-                      "Service: "
-                        + (
-                          application.service
-                          || "-"
-                        )
-                    );
-
-
-                    console.log(
-                      "Current Status: "
-                        + (
-                          application.currentStatus
-                          || "-"
-                        )
-                    );
-
-
-                    console.log(
-                      "Location: "
-                        + (
-                          application.location
-                          || "-"
-                        )
-                    );
-
-
-                    console.log(
-                      "Last Update: "
-                        + (
-                          application.lastUpdate
-                          || "-"
-                        )
-                    );
-                  }
-
-                } else {
 
                   console.log(
-                    "Applications: 0"
+                    "Applicant: "
+                      + (
+                        application.applicantName
+                        || "-"
+                      )
                   );
+
+
+                  console.log(
+                    "Service: "
+                      + (
+                        application.service
+                        || "-"
+                      )
+                  );
+
+
+                  console.log(
+                    "Current Status: "
+                      + (
+                        application.currentStatus
+                        || "-"
+                      )
+                  );
+
+
+                  console.log(
+                    "Location: "
+                      + (
+                        application.location
+                        || "-"
+                      )
+                  );
+
+
+                  console.log(
+                    "Last Update: "
+                      + (
+                        application.lastUpdate
+                        || "-"
+                      )
+                  );
+
                 }
+
+              } else {
+
+                console.log(
+                  "Applications: 0"
+                );
+
               }
 
-
-              console.log(
-                "=========================================="
-              );
-
-              console.log(
-                "Firebase test completed successfully."
-              );
-
-              console.log(
-                "=========================================="
-              );
-
-
-            } catch (error) {
-
-              console.error(
-                "=========================================="
-              );
-
-              console.error(
-                "Firebase Database connection FAILED"
-              );
-
-              console.error(
-                "=========================================="
-              );
-
-
-              console.error(
-                error.message
-              );
-
-
-              process.exit(1);
             }
+
+
+            console.log(
+              "=========================================="
+            );
+
+
+            console.log(
+              "Firebase test completed successfully."
+            );
+
+
+            console.log(
+              "=========================================="
+            );
+
           }
 
 
-          testDatabase();
+          // ==========================================
+          // Run Main Function
+          // ==========================================
+
+          main()
+
+            .then(
+              () => {
+
+                console.log(
+                  "Node.js process completed successfully."
+                );
+
+                process.exit(0);
+
+              }
+            )
+
+            .catch(
+              (error) => {
+
+                console.error(
+                  "=========================================="
+                );
+
+
+                console.error(
+                  "Firebase test FAILED"
+                );
+
+
+                console.error(
+                  "=========================================="
+                );
+
+
+                console.error(
+                  error.message
+                );
+
+
+                process.exit(1);
+
+              }
+            );
 
           EOF
 
