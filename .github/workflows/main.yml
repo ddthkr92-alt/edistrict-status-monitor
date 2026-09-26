@@ -5,7 +5,7 @@ on:
 
 jobs:
 
-  test-firebase:
+  test-edistrict-api:
 
     runs-on: ubuntu-latest
 
@@ -31,22 +31,22 @@ jobs:
 
 
       # ==========================================
-      # Step 3 - Install Firebase Admin SDK
+      # Step 3 - Install required packages
       # ==========================================
 
-      - name: Install Firebase Admin SDK
+      - name: Install dependencies
         run: |
 
           npm init -y
 
-          npm install firebase-admin
+          npm install firebase-admin fast-xml-parser
 
 
       # ==========================================
-      # Step 4 - Test Firebase Realtime Database
+      # Step 4 - Test e-District API
       # ==========================================
 
-      - name: Test Firebase Realtime Database
+      - name: Test e-District API
 
         env:
 
@@ -54,38 +54,42 @@ jobs:
 
         run: |
 
-          cat > test-firebase.js <<'EOF'
+          cat > test-edistrict.js <<'EOF'
 
           const {
             initializeApp,
             cert
           } = require("firebase-admin/app");
 
-
           const {
             getDatabase
           } = require("firebase-admin/database");
 
+          const {
+            XMLParser
+          } = require("fast-xml-parser");
+
 
           // ==========================================
-          // Firebase Database URL
+          // Firebase
           // ==========================================
 
           const DATABASE_URL =
             "https://edistrict-status-test-default-rtdb.asia-southeast1.firebasedatabase.app";
 
 
-          console.log(
-            "=========================================="
-          );
+          // ==========================================
+          // e-District SOAP API
+          // ==========================================
 
-          console.log(
-            "eDistrict Firebase Monitor"
-          );
+          const SOAP_ADDRESS =
+            "http://164.100.181.28/nichqreport/responseup.asmx";
 
-          console.log(
-            "=========================================="
-          );
+          const SOAP_ACTION =
+            "http://tempuri.org/retAppStatus";
+
+          const NAMESPACE =
+            "http://tempuri.org/";
 
 
           // ==========================================
@@ -94,9 +98,22 @@ jobs:
 
           async function main() {
 
-            // ------------------------------------------
-            // Check Secret
-            // ------------------------------------------
+            console.log(
+              "=========================================="
+            );
+
+            console.log(
+              "eDistrict API Test"
+            );
+
+            console.log(
+              "=========================================="
+            );
+
+
+            // ========================================
+            // Check Firebase Secret
+            // ========================================
 
             if (
               !process.env.FIREBASE_SERVICE_ACCOUNT_JSON
@@ -105,39 +122,23 @@ jobs:
               throw new Error(
                 "Firebase service account secret is missing."
               );
+
             }
 
 
-            console.log(
-              "Firebase service account secret detected."
-            );
-
-
-            // ------------------------------------------
+            // ========================================
             // Parse Service Account
-            // ------------------------------------------
+            // ========================================
 
-            let serviceAccount;
-
-
-            try {
-
-              serviceAccount =
-                JSON.parse(
-                  process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-                );
-
-            } catch (error) {
-
-              throw new Error(
-                "Firebase service account JSON is invalid."
+            const serviceAccount =
+              JSON.parse(
+                process.env.FIREBASE_SERVICE_ACCOUNT_JSON
               );
-            }
 
 
-            // ------------------------------------------
-            // Initialize Firebase Admin
-            // ------------------------------------------
+            // ========================================
+            // Initialize Firebase
+            // ========================================
 
             initializeApp({
 
@@ -155,27 +156,13 @@ jobs:
             );
 
 
-            console.log(
-              "Database URL:"
-            );
-
-
-            console.log(
-              DATABASE_URL
-            );
-
-
-            // ------------------------------------------
-            // Get Database
-            // ------------------------------------------
+            // ========================================
+            // Read Applications
+            // ========================================
 
             const db =
               getDatabase();
 
-
-            // ------------------------------------------
-            // Read Users
-            // ------------------------------------------
 
             const snapshot =
               await db
@@ -183,32 +170,14 @@ jobs:
                 .once("value");
 
 
-            console.log(
-              "=========================================="
-            );
-
-
-            console.log(
-              "Firebase Database connection SUCCESS"
-            );
-
-
-            console.log(
-              "=========================================="
-            );
-
-
-            // ------------------------------------------
-            // Check Data
-            // ------------------------------------------
-
             if (!snapshot.exists()) {
 
               console.log(
-                "No users found in Firebase Database."
+                "No users found."
               );
 
               return;
+
             }
 
 
@@ -216,126 +185,62 @@ jobs:
               snapshot.val();
 
 
-            const userIds =
-              Object.keys(users);
+            let applications = [];
 
-
-            console.log(
-              "Users found: "
-                + userIds.length
-            );
-
-
-            // ------------------------------------------
-            // Read Applications
-            // ------------------------------------------
 
             for (
-              const uid of userIds
+              const uid of Object.keys(users)
             ) {
-
-              console.log(
-                "------------------------------------------"
-              );
-
-
-              console.log(
-                "User UID: "
-                  + uid
-              );
-
 
               const user =
                 users[uid];
 
 
-              if (
-                user.applications
+              if (!user.applications) {
+                continue;
+              }
+
+
+              for (
+                const applicationId
+                of Object.keys(
+                  user.applications
+                )
               ) {
 
-                const applicationIds =
-                  Object.keys(
-                    user.applications
-                  );
+                const application =
+                  user.applications[
+                    applicationId
+                  ];
 
 
-                console.log(
-                  "Applications: "
-                    + applicationIds.length
-                );
-
-
-                for (
-                  const applicationId
-                  of applicationIds
+                if (
+                  application
+                  && application.applicationNumber
                 ) {
 
-                  const application =
-                    user.applications[
-                      applicationId
-                    ];
+                  applications.push({
 
+                    uid:
+                      uid,
 
-                  console.log(
-                    "Application: "
-                      + (
+                    applicationId:
+                      applicationId,
+
+                    applicationNumber:
+                      String(
                         application.applicationNumber
-                        || applicationId
-                      )
-                  );
+                      ),
 
-
-                  console.log(
-                    "Applicant: "
-                      + (
-                        application.applicantName
-                        || "-"
-                      )
-                  );
-
-
-                  console.log(
-                    "Service: "
-                      + (
-                        application.service
-                        || "-"
-                      )
-                  );
-
-
-                  console.log(
-                    "Current Status: "
-                      + (
+                    currentStatus:
+                      String(
                         application.currentStatus
-                        || "-"
+                        || ""
                       )
-                  );
 
-
-                  console.log(
-                    "Location: "
-                      + (
-                        application.location
-                        || "-"
-                      )
-                  );
-
-
-                  console.log(
-                    "Last Update: "
-                      + (
-                        application.lastUpdate
-                        || "-"
-                      )
-                  );
+                  });
 
                 }
-
-              } else {
-
-                console.log(
-                  "Applications: 0"
-                );
 
               }
 
@@ -343,12 +248,190 @@ jobs:
 
 
             console.log(
+              "Applications found: "
+                + applications.length
+            );
+
+
+            if (
+              applications.length === 0
+            ) {
+
+              console.log(
+                "No applications available for checking."
+              );
+
+              return;
+
+            }
+
+
+            // ========================================
+            // XML Parser
+            // ========================================
+
+            const parser =
+              new XMLParser({
+
+                ignoreAttributes:
+                  true,
+
+                removeNSPrefix:
+                  true,
+
+                trimValues:
+                  true
+
+              });
+
+
+            // ========================================
+            // Check Each Application
+            // ========================================
+
+            let checkedCount = 0;
+
+            let failedCount = 0;
+
+
+            for (
+              const application
+              of applications
+            ) {
+
+              try {
+
+                const result =
+                  await checkEdistrictStatus(
+                    application.applicationNumber,
+                    parser
+                  );
+
+
+                checkedCount++;
+
+
+                const oldStatus =
+                  application.currentStatus
+                    || "";
+
+
+                const newStatus =
+                  result.status
+                    || "";
+
+
+                console.log(
+                  "------------------------------------------"
+                );
+
+
+                console.log(
+                  "Application checked successfully."
+                );
+
+
+                console.log(
+                  "Service: "
+                    + (
+                      result.service
+                      || "-"
+                    )
+                );
+
+
+                console.log(
+                  "Status received: "
+                    + (
+                      newStatus
+                      || "-"
+                    )
+                );
+
+
+                console.log(
+                  "Location: "
+                    + (
+                      result.location
+                      || "-"
+                    )
+                );
+
+
+                console.log(
+                  "Last update: "
+                    + (
+                      result.movedOn
+                      || "-"
+                    )
+                );
+
+
+                if (
+                  oldStatus
+                  === newStatus
+                ) {
+
+                  console.log(
+                    "Status comparison: NO CHANGE"
+                  );
+
+                } else {
+
+                  console.log(
+                    "Status comparison: CHANGE DETECTED"
+                  );
+
+                }
+
+
+              } catch (error) {
+
+                failedCount++;
+
+
+                console.error(
+                  "------------------------------------------"
+                );
+
+
+                console.error(
+                  "Application status check failed."
+                );
+
+
+                console.error(
+                  error.message
+                );
+
+              }
+
+            }
+
+
+            // ========================================
+            // Final Result
+            // ========================================
+
+            console.log(
               "=========================================="
             );
 
 
             console.log(
-              "Firebase test completed successfully."
+              "e-District API test completed."
+            );
+
+
+            console.log(
+              "Applications checked: "
+                + checkedCount
+            );
+
+
+            console.log(
+              "Failed checks: "
+                + failedCount
             );
 
 
@@ -360,7 +443,409 @@ jobs:
 
 
           // ==========================================
-          // Run Main Function
+          // e-District SOAP Request
+          // ==========================================
+
+          async function checkEdistrictStatus(
+            applicationNumber,
+            parser
+          ) {
+
+            const soapBody =
+
+              '<?xml version="1.0" encoding="utf-8"?>'
+              +
+              '<soap:Envelope '
+              +
+              'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+              +
+              'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+              +
+              'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+              +
+              '<soap:Body>'
+              +
+              '<retAppStatus xmlns="'
+              + NAMESPACE
+              + '">'
+              +
+              '<application_no>'
+              +
+              escapeXml(
+                applicationNumber
+              )
+              +
+              '</application_no>'
+              +
+              '</retAppStatus>'
+              +
+              '</soap:Body>'
+              +
+              '</soap:Envelope>';
+
+
+            const response =
+              await fetch(
+                SOAP_ADDRESS,
+                {
+
+                  method:
+                    "POST",
+
+                  headers: {
+
+                    "Content-Type":
+                      "text/xml; charset=utf-8",
+
+                    "SOAPAction":
+                      '"' + SOAP_ACTION + '"'
+
+                  },
+
+                  body:
+                    soapBody
+
+                }
+              );
+
+
+            if (
+              !response.ok
+            ) {
+
+              throw new Error(
+                "e-District API HTTP error: "
+                  + response.status
+              );
+
+            }
+
+
+            const xml =
+              await response.text();
+
+
+            if (
+              !xml
+              || xml.trim().length === 0
+            ) {
+
+              throw new Error(
+                "e-District API returned empty response."
+              );
+
+            }
+
+
+            // ========================================
+            // Parse SOAP XML
+            // ========================================
+
+            const parsed =
+              parser.parse(
+                xml
+              );
+
+
+            // ========================================
+            // Find Response Data
+            // ========================================
+
+            const result =
+              extractApplicationData(
+                parsed
+              );
+
+
+            if (
+              !result.status
+              && !result.name
+              && !result.service
+            ) {
+
+              throw new Error(
+                "e-District API response received, but application data could not be parsed."
+              );
+
+            }
+
+
+            return {
+
+              name:
+                result.name
+                || "",
+
+              status:
+                result.status
+                || "",
+
+              location:
+                result.location
+                || "",
+
+              movedOn:
+                result.movedon
+                || result.movedOn
+                || "",
+
+              certificateDownload:
+                result.ic_download
+                || "",
+
+              service:
+                result.service
+                || ""
+
+            };
+
+          }
+
+
+          // ==========================================
+          // Extract Application Data
+          // ==========================================
+
+          function extractApplicationData(
+            value
+          ) {
+
+            if (
+              !value
+              || typeof value !== "object"
+            ) {
+
+              return {};
+
+            }
+
+
+            // ----------------------------------------
+            // Direct object
+            // ----------------------------------------
+
+            const normalized = {};
+
+
+            for (
+              const key
+              of Object.keys(value)
+            ) {
+
+              const lowerKey =
+                key
+                  .toLowerCase()
+                  .replace(
+                    /[^a-z0-9_]/g,
+                    ""
+                  );
+
+
+              if (
+                lowerKey === "name"
+                && typeof value[key] === "string"
+              ) {
+
+                normalized.name =
+                  value[key];
+
+              }
+
+
+              if (
+                lowerKey === "status"
+                && typeof value[key] === "string"
+              ) {
+
+                normalized.status =
+                  value[key];
+
+              }
+
+
+              if (
+                lowerKey === "location"
+                && typeof value[key] === "string"
+              ) {
+
+                normalized.location =
+                  value[key];
+
+              }
+
+
+              if (
+                (
+                  lowerKey === "movedon"
+                  ||
+                  lowerKey === "movedondate"
+                )
+                &&
+                typeof value[key] === "string"
+              ) {
+
+                normalized.movedon =
+                  value[key];
+
+              }
+
+
+              if (
+                (
+                  lowerKey === "service"
+                  ||
+                  lowerKey === "servicename"
+                )
+                &&
+                typeof value[key] === "string"
+              ) {
+
+                normalized.service =
+                  value[key];
+
+              }
+
+
+              if (
+                (
+                  lowerKey === "ic_download"
+                  ||
+                  lowerKey === "icdownload"
+                )
+                &&
+                typeof value[key] === "string"
+              ) {
+
+                normalized.ic_download =
+                  value[key];
+
+              }
+
+            }
+
+
+            if (
+              normalized.name
+              || normalized.status
+              || normalized.service
+            ) {
+
+              return normalized;
+
+            }
+
+
+            // ----------------------------------------
+            // Search nested objects
+            // ----------------------------------------
+
+            for (
+              const key
+              of Object.keys(value)
+            ) {
+
+              const child =
+                value[key];
+
+
+              if (
+                Array.isArray(child)
+              ) {
+
+                for (
+                  const item
+                  of child
+                ) {
+
+                  const found =
+                    extractApplicationData(
+                      item
+                    );
+
+
+                  if (
+                    found.name
+                    || found.status
+                    || found.service
+                  ) {
+
+                    return found;
+
+                  }
+
+                }
+
+              }
+
+
+              if (
+                child
+                && typeof child === "object"
+              ) {
+
+                const found =
+                  extractApplicationData(
+                    child
+                  );
+
+
+                if (
+                  found.name
+                  || found.status
+                  || found.service
+                ) {
+
+                  return found;
+
+                }
+
+              }
+
+            }
+
+
+            return {};
+
+          }
+
+
+          // ==========================================
+          // XML Escape
+          // ==========================================
+
+          function escapeXml(
+            value
+          ) {
+
+            return String(
+              value
+            )
+              .replace(
+                /&/g,
+                "&amp;"
+              )
+              .replace(
+                /</g,
+                "&lt;"
+              )
+              .replace(
+                />/g,
+                "&gt;"
+              )
+              .replace(
+                /"/g,
+                "&quot;"
+              )
+              .replace(
+                /'/g,
+                "&apos;"
+              );
+
+          }
+
+
+          // ==========================================
+          // Start
           // ==========================================
 
           main()
@@ -386,7 +871,7 @@ jobs:
 
 
                 console.error(
-                  "Firebase test FAILED"
+                  "e-District API test FAILED"
                 );
 
 
@@ -408,4 +893,4 @@ jobs:
           EOF
 
 
-          node test-firebase.js
+          node test-edistrict.js
