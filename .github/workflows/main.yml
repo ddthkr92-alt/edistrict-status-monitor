@@ -5,7 +5,7 @@ on:
 
 jobs:
 
-  test-edistrict-api:
+  monitor-status:
 
     runs-on: ubuntu-latest
 
@@ -31,7 +31,7 @@ jobs:
 
 
       # ==========================================
-      # Step 3 - Install required packages
+      # Step 3 - Install dependencies
       # ==========================================
 
       - name: Install dependencies
@@ -43,10 +43,10 @@ jobs:
 
 
       # ==========================================
-      # Step 4 - Test e-District API
+      # Step 4 - Monitor e-District applications
       # ==========================================
 
-      - name: Test e-District API
+      - name: Monitor e-District applications
 
         env:
 
@@ -54,16 +54,18 @@ jobs:
 
         run: |
 
-          cat > test-edistrict.js <<'EOF'
+          cat > monitor-edistrict.js <<'EOF'
 
           const {
             initializeApp,
             cert
           } = require("firebase-admin/app");
 
+
           const {
             getDatabase
           } = require("firebase-admin/database");
+
 
           const {
             XMLParser
@@ -71,7 +73,7 @@ jobs:
 
 
           // ==========================================
-          // Firebase
+          // Firebase Database
           // ==========================================
 
           const DATABASE_URL =
@@ -85,8 +87,10 @@ jobs:
           const SOAP_ADDRESS =
             "http://164.100.181.28/nichqreport/responseup.asmx";
 
+
           const SOAP_ACTION =
             "http://tempuri.org/retAppStatus";
+
 
           const NAMESPACE =
             "http://tempuri.org/";
@@ -103,7 +107,7 @@ jobs:
             );
 
             console.log(
-              "eDistrict API Test"
+              "eDistrict Status Monitor"
             );
 
             console.log(
@@ -112,7 +116,7 @@ jobs:
 
 
             // ========================================
-            // Check Firebase Secret
+            // Check Secret
             // ========================================
 
             if (
@@ -130,14 +134,27 @@ jobs:
             // Parse Service Account
             // ========================================
 
-            const serviceAccount =
-              JSON.parse(
-                process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+            let serviceAccount;
+
+
+            try {
+
+              serviceAccount =
+                JSON.parse(
+                  process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+                );
+
+            } catch (error) {
+
+              throw new Error(
+                "Firebase service account JSON is invalid."
               );
+
+            }
 
 
             // ========================================
-            // Initialize Firebase
+            // Initialize Firebase Admin
             // ========================================
 
             initializeApp({
@@ -157,20 +174,26 @@ jobs:
 
 
             // ========================================
-            // Read Applications
+            // Firebase Database
             // ========================================
 
             const db =
               getDatabase();
 
 
-            const snapshot =
+            // ========================================
+            // Read Users
+            // ========================================
+
+            const usersSnapshot =
               await db
                 .ref("users")
                 .once("value");
 
 
-            if (!snapshot.exists()) {
+            if (
+              !usersSnapshot.exists()
+            ) {
 
               console.log(
                 "No users found."
@@ -182,22 +205,32 @@ jobs:
 
 
             const users =
-              snapshot.val();
+              usersSnapshot.val();
 
 
             let applications = [];
 
 
+            // ========================================
+            // Collect Applications
+            // ========================================
+
             for (
-              const uid of Object.keys(users)
+              const uid
+              of Object.keys(users)
             ) {
 
               const user =
                 users[uid];
 
 
-              if (!user.applications) {
+              if (
+                !user
+                || !user.applications
+              ) {
+
                 continue;
+
               }
 
 
@@ -215,32 +248,35 @@ jobs:
 
 
                 if (
-                  application
-                  && application.applicationNumber
+                  !application
+                  || !application.applicationNumber
                 ) {
 
-                  applications.push({
-
-                    uid:
-                      uid,
-
-                    applicationId:
-                      applicationId,
-
-                    applicationNumber:
-                      String(
-                        application.applicationNumber
-                      ),
-
-                    currentStatus:
-                      String(
-                        application.currentStatus
-                        || ""
-                      )
-
-                  });
+                  continue;
 
                 }
+
+
+                applications.push({
+
+                  uid:
+                    uid,
+
+                  applicationId:
+                    applicationId,
+
+                  applicationNumber:
+                    String(
+                      application.applicationNumber
+                    ),
+
+                  currentStatus:
+                    String(
+                      application.currentStatus
+                      || ""
+                    )
+
+                });
 
               }
 
@@ -258,7 +294,7 @@ jobs:
             ) {
 
               console.log(
-                "No applications available for checking."
+                "No applications available for monitoring."
               );
 
               return;
@@ -286,13 +322,28 @@ jobs:
 
 
             // ========================================
-            // Check Each Application
+            // Counters
             // ========================================
 
-            let checkedCount = 0;
+            let checkedCount =
+              0;
 
-            let failedCount = 0;
 
+            let unchangedCount =
+              0;
+
+
+            let changedCount =
+              0;
+
+
+            let failedCount =
+              0;
+
+
+            // ========================================
+            // Check Applications
+            // ========================================
 
             for (
               const application
@@ -312,78 +363,69 @@ jobs:
 
 
                 const oldStatus =
-                  application.currentStatus
-                    || "";
+                  normalizeStatus(
+                    application.currentStatus
+                  );
 
 
                 const newStatus =
-                  result.status
-                    || "";
+                  normalizeStatus(
+                    result.status
+                  );
 
 
-                console.log(
-                  "------------------------------------------"
-                );
-
-
-                console.log(
-                  "Application checked successfully."
-                );
-
-
-                console.log(
-                  "Service: "
-                    + (
-                      result.service
-                      || "-"
-                    )
-                );
-
-
-                console.log(
-                  "Status received: "
-                    + (
-                      newStatus
-                      || "-"
-                    )
-                );
-
-
-                console.log(
-                  "Location: "
-                    + (
-                      result.location
-                      || "-"
-                    )
-                );
-
-
-                console.log(
-                  "Last update: "
-                    + (
-                      result.movedOn
-                      || "-"
-                    )
-                );
-
+                // ====================================
+                // Compare Status
+                // ====================================
 
                 if (
-                  oldStatus
-                  === newStatus
+                  oldStatus === newStatus
                 ) {
 
+                  unchangedCount++;
+
+
                   console.log(
-                    "Status comparison: NO CHANGE"
+                    "Application checked: STATUS UNCHANGED"
                   );
+
 
                 } else {
 
+                  changedCount++;
+
+
                   console.log(
-                    "Status comparison: CHANGE DETECTED"
+                    "Application checked: STATUS CHANGED"
+                  );
+
+
+                  // ==================================
+                  // Update Firebase
+                  // ==================================
+
+                  await updateApplication(
+                    db,
+                    application,
+                    result
+                  );
+
+
+                  console.log(
+                    "Firebase application data updated."
                   );
 
                 }
 
+
+                // ====================================
+                // Update Last Check Time
+                // ====================================
+
+                await updateLastChecked(
+                  db,
+                  application
+                );
 
               } catch (error) {
 
@@ -391,12 +433,7 @@ jobs:
 
 
                 console.error(
-                  "------------------------------------------"
-                );
-
-
-                console.error(
-                  "Application status check failed."
+                  "Application check failed:"
                 );
 
 
@@ -410,7 +447,7 @@ jobs:
 
 
             // ========================================
-            // Final Result
+            // Final Summary
             // ========================================
 
             console.log(
@@ -419,13 +456,25 @@ jobs:
 
 
             console.log(
-              "e-District API test completed."
+              "Monitoring completed."
             );
 
 
             console.log(
               "Applications checked: "
                 + checkedCount
+            );
+
+
+            console.log(
+              "Status unchanged: "
+                + unchangedCount
+            );
+
+
+            console.log(
+              "Status changed: "
+                + changedCount
             );
 
 
@@ -443,7 +492,7 @@ jobs:
 
 
           // ==========================================
-          // e-District SOAP Request
+          // Check e-District Status
           // ==========================================
 
           async function checkEdistrictStatus(
@@ -538,7 +587,7 @@ jobs:
 
 
             // ========================================
-            // Parse SOAP XML
+            // Parse XML
             // ========================================
 
             const parsed =
@@ -546,10 +595,6 @@ jobs:
                 xml
               );
 
-
-            // ========================================
-            // Find Response Data
-            // ========================================
 
             const result =
               extractApplicationData(
@@ -564,7 +609,7 @@ jobs:
             ) {
 
               throw new Error(
-                "e-District API response received, but application data could not be parsed."
+                "Application data could not be parsed from e-District response."
               );
 
             }
@@ -603,6 +648,80 @@ jobs:
 
 
           // ==========================================
+          // Update Application in Firebase
+          // ==========================================
+
+          async function updateApplication(
+            db,
+            application,
+            result
+          ) {
+
+            const path =
+              "users/"
+              + application.uid
+              + "/applications/"
+              + application.applicationId;
+
+
+            const now =
+              Date.now();
+
+
+            const updates = {
+
+              currentStatus:
+                result.status
+                || "",
+
+              location:
+                result.location
+                || "",
+
+              lastUpdate:
+                result.movedOn
+                || "",
+
+              updatedAt:
+                now
+
+            };
+
+
+            await db
+              .ref(path)
+              .update(updates);
+
+          }
+
+
+          // ==========================================
+          // Update Last Checked Time
+          // ==========================================
+
+          async function updateLastChecked(
+            db,
+            application
+          ) {
+
+            const path =
+              "users/"
+              + application.uid
+              + "/applications/"
+              + application.applicationId
+              + "/lastCheckedAt";
+
+
+            await db
+              .ref(path)
+              .set(
+                Date.now()
+              );
+
+          }
+
+
+          // ==========================================
           // Extract Application Data
           // ==========================================
 
@@ -620,12 +739,12 @@ jobs:
             }
 
 
-            // ----------------------------------------
-            // Direct object
-            // ----------------------------------------
-
             const normalized = {};
 
+
+            // ========================================
+            // Direct Fields
+            // ========================================
 
             for (
               const key
@@ -643,7 +762,8 @@ jobs:
 
               if (
                 lowerKey === "name"
-                && typeof value[key] === "string"
+                &&
+                typeof value[key] === "string"
               ) {
 
                 normalized.name =
@@ -654,7 +774,8 @@ jobs:
 
               if (
                 lowerKey === "status"
-                && typeof value[key] === "string"
+                &&
+                typeof value[key] === "string"
               ) {
 
                 normalized.status =
@@ -665,7 +786,8 @@ jobs:
 
               if (
                 lowerKey === "location"
-                && typeof value[key] === "string"
+                &&
+                typeof value[key] === "string"
               ) {
 
                 normalized.location =
@@ -726,8 +848,10 @@ jobs:
 
             if (
               normalized.name
-              || normalized.status
-              || normalized.service
+              ||
+              normalized.status
+              ||
+              normalized.service
             ) {
 
               return normalized;
@@ -735,9 +859,9 @@ jobs:
             }
 
 
-            // ----------------------------------------
-            // Search nested objects
-            // ----------------------------------------
+            // ========================================
+            // Search Nested Objects
+            // ========================================
 
             for (
               const key
@@ -765,8 +889,10 @@ jobs:
 
                   if (
                     found.name
-                    || found.status
-                    || found.service
+                    ||
+                    found.status
+                    ||
+                    found.service
                   ) {
 
                     return found;
@@ -780,7 +906,8 @@ jobs:
 
               if (
                 child
-                && typeof child === "object"
+                &&
+                typeof child === "object"
               ) {
 
                 const found =
@@ -791,8 +918,10 @@ jobs:
 
                 if (
                   found.name
-                  || found.status
-                  || found.service
+                  ||
+                  found.status
+                  ||
+                  found.service
                 ) {
 
                   return found;
@@ -805,6 +934,37 @@ jobs:
 
 
             return {};
+
+          }
+
+
+          // ==========================================
+          // Normalize Status
+          // ==========================================
+
+          function normalizeStatus(
+            value
+          ) {
+
+            if (
+              value === null
+              ||
+              value === undefined
+            ) {
+
+              return "";
+
+            }
+
+
+            return String(
+              value
+            )
+              .trim()
+              .replace(
+                /\s+/g,
+                " "
+              );
 
           }
 
@@ -845,7 +1005,7 @@ jobs:
 
 
           // ==========================================
-          // Start
+          // Start Monitor
           // ==========================================
 
           main()
@@ -857,7 +1017,10 @@ jobs:
                   "Node.js process completed successfully."
                 );
 
-                process.exit(0);
+
+                process.exit(
+                  0
+                );
 
               }
             )
@@ -871,7 +1034,7 @@ jobs:
 
 
                 console.error(
-                  "e-District API test FAILED"
+                  "Monitoring FAILED"
                 );
 
 
@@ -885,7 +1048,9 @@ jobs:
                 );
 
 
-                process.exit(1);
+                process.exit(
+                  1
+                );
 
               }
             );
@@ -893,4 +1058,4 @@ jobs:
           EOF
 
 
-          node test-edistrict.js
+          node monitor-edistrict.js
