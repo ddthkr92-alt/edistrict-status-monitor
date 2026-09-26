@@ -12,7 +12,7 @@ jobs:
     steps:
 
       # ==========================================
-      # Step 1 - Checkout repository
+      # 1. Checkout
       # ==========================================
 
       - name: Checkout repository
@@ -20,36 +20,32 @@ jobs:
 
 
       # ==========================================
-      # Step 2 - Setup Node.js
+      # 2. Node.js
       # ==========================================
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
-
         with:
           node-version: 22
 
 
       # ==========================================
-      # Step 3 - Install dependencies
+      # 3. Dependencies
       # ==========================================
 
       - name: Install dependencies
         run: |
-
           npm init -y
-
           npm install firebase-admin fast-xml-parser
 
 
       # ==========================================
-      # Step 4 - Monitor e-District applications
+      # 4. Monitor + FCM
       # ==========================================
 
       - name: Monitor e-District applications
 
         env:
-
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
 
         run: |
@@ -68,12 +64,17 @@ jobs:
 
 
           const {
+            getMessaging
+          } = require("firebase-admin/messaging");
+
+
+          const {
             XMLParser
           } = require("fast-xml-parser");
 
 
           // ==========================================
-          // Firebase Database
+          // Firebase
           // ==========================================
 
           const DATABASE_URL =
@@ -81,7 +82,7 @@ jobs:
 
 
           // ==========================================
-          // e-District SOAP API
+          // e-District API
           // ==========================================
 
           const SOAP_ADDRESS =
@@ -97,7 +98,7 @@ jobs:
 
 
           // ==========================================
-          // Main Function
+          // Main
           // ==========================================
 
           async function main() {
@@ -107,7 +108,7 @@ jobs:
             );
 
             console.log(
-              "eDistrict Status Monitor"
+              "eDistrict Status Monitor + FCM"
             );
 
             console.log(
@@ -116,7 +117,7 @@ jobs:
 
 
             // ========================================
-            // Check Secret
+            // Secret
             // ========================================
 
             if (
@@ -130,31 +131,14 @@ jobs:
             }
 
 
-            // ========================================
-            // Parse Service Account
-            // ========================================
-
-            let serviceAccount;
-
-
-            try {
-
-              serviceAccount =
-                JSON.parse(
-                  process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-                );
-
-            } catch (error) {
-
-              throw new Error(
-                "Firebase service account JSON is invalid."
+            const serviceAccount =
+              JSON.parse(
+                process.env.FIREBASE_SERVICE_ACCOUNT_JSON
               );
 
-            }
-
 
             // ========================================
-            // Initialize Firebase Admin
+            // Firebase Admin
             // ========================================
 
             initializeApp({
@@ -168,21 +152,21 @@ jobs:
             });
 
 
+            const db =
+              getDatabase();
+
+
+            const messaging =
+              getMessaging();
+
+
             console.log(
               "Firebase Admin initialized successfully."
             );
 
 
             // ========================================
-            // Firebase Database
-            // ========================================
-
-            const db =
-              getDatabase();
-
-
-            // ========================================
-            // Read Users
+            // Read users
             // ========================================
 
             const usersSnapshot =
@@ -208,11 +192,11 @@ jobs:
               usersSnapshot.val();
 
 
-            let applications = [];
+            const applications = [];
 
 
             // ========================================
-            // Collect Applications
+            // Collect applications
             // ========================================
 
             for (
@@ -270,9 +254,33 @@ jobs:
                       application.applicationNumber
                     ),
 
+                  applicantName:
+                    String(
+                      application.applicantName
+                      || ""
+                    ),
+
+                  service:
+                    String(
+                      application.service
+                      || ""
+                    ),
+
                   currentStatus:
                     String(
                       application.currentStatus
+                      || ""
+                    ),
+
+                  lastNotifiedStatus:
+                    String(
+                      application.lastNotifiedStatus
+                      || ""
+                    ),
+
+                  fcmToken:
+                    String(
+                      user.fcmToken
                       || ""
                     )
 
@@ -293,17 +301,13 @@ jobs:
               applications.length === 0
             ) {
 
-              console.log(
-                "No applications available for monitoring."
-              );
-
               return;
 
             }
 
 
             // ========================================
-            // XML Parser
+            // XML parser
             // ========================================
 
             const parser =
@@ -337,12 +341,16 @@ jobs:
               0;
 
 
+            let notificationCount =
+              0;
+
+
             let failedCount =
               0;
 
 
             // ========================================
-            // Check Applications
+            // Monitor applications
             // ========================================
 
             for (
@@ -374,9 +382,9 @@ jobs:
                   );
 
 
-                // ====================================
-                // Compare Status
-                // ====================================
+                // ==================================
+                // No status change
+                // ==================================
 
                 if (
                   oldStatus === newStatus
@@ -390,41 +398,110 @@ jobs:
                   );
 
 
-                } else {
-
-                  changedCount++;
-
-
-                  console.log(
-                    "Application checked: STATUS CHANGED"
+                  await updateLastChecked(
+                    db,
+                    application
                   );
 
 
-                  // ==================================
-                  // Update Firebase
-                  // ==================================
+                  continue;
 
-                  await updateApplication(
-                    db,
+                }
+
+
+                // ==================================
+                // Status changed
+                // ==================================
+
+                changedCount++;
+
+
+                console.log(
+                  "Application checked: STATUS CHANGED"
+                );
+
+
+                // ==================================
+                // Send notification only when
+                // this status was not notified before
+                // ==================================
+
+                const alreadyNotified =
+                  normalizeStatus(
+                    application.lastNotifiedStatus
+                  )
+                  === newStatus;
+
+
+                if (
+                  !alreadyNotified
+                  && application.fcmToken
+                ) {
+
+                  await sendStatusNotification(
+                    messaging,
                     application,
                     result
                   );
 
 
+                  notificationCount++;
+
+
+                  // Save notified status
+                  await db
+                    .ref(
+                      "users/"
+                      + application.uid
+                      + "/applications/"
+                      + application.applicationId
+                      + "/lastNotifiedStatus"
+                    )
+                    .set(
+                      newStatus
+                    );
+
+
                   console.log(
-                    "Firebase application data updated."
+                    "FCM notification sent successfully."
+                  );
+
+                } else if (
+                  alreadyNotified
+                ) {
+
+                  console.log(
+                    "Notification already sent for this status."
+                  );
+
+                } else {
+
+                  console.log(
+                    "FCM token not available."
                   );
 
                 }
 
 
-                // ====================================
-                // Update Last Check Time
-                // ====================================
+                // ==================================
+                // Update application
+                // ==================================
+
+                await updateApplication(
+                  db,
+                  application,
+                  result
+                );
+
 
                 await updateLastChecked(
                   db,
                   application
+                );
+
+
+                console.log(
+                  "Firebase application data updated."
                 );
 
               } catch (error) {
@@ -447,7 +524,7 @@ jobs:
 
 
             // ========================================
-            // Final Summary
+            // Summary
             // ========================================
 
             console.log(
@@ -479,6 +556,12 @@ jobs:
 
 
             console.log(
+              "Notifications sent: "
+                + notificationCount
+            );
+
+
+            console.log(
               "Failed checks: "
                 + failedCount
             );
@@ -492,7 +575,7 @@ jobs:
 
 
           // ==========================================
-          // Check e-District Status
+          // e-District SOAP request
           // ==========================================
 
           async function checkEdistrictStatus(
@@ -576,7 +659,7 @@ jobs:
 
             if (
               !xml
-              || xml.trim().length === 0
+              || !xml.trim()
             ) {
 
               throw new Error(
@@ -585,10 +668,6 @@ jobs:
 
             }
 
-
-            // ========================================
-            // Parse XML
-            // ========================================
 
             const parsed =
               parser.parse(
@@ -609,7 +688,7 @@ jobs:
             ) {
 
               throw new Error(
-                "Application data could not be parsed from e-District response."
+                "Application data could not be parsed."
               );
 
             }
@@ -648,7 +727,82 @@ jobs:
 
 
           // ==========================================
-          // Update Application in Firebase
+          // Send FCM notification
+          // ==========================================
+
+          async function sendStatusNotification(
+            messaging,
+            application,
+            result
+          ) {
+
+            const newStatus =
+              result.status
+              || "नई स्थिति उपलब्ध है";
+
+
+            const service =
+              result.service
+              || application.service
+              || "e-District आवेदन";
+
+
+            const applicationNumber =
+              application.applicationNumber;
+
+
+            const message = {
+
+              token:
+                application.fcmToken,
+
+              notification: {
+
+                title:
+                  "🔔 e-District Status बदला",
+
+                body:
+                  service
+                  + " • "
+                  + newStatus
+
+              },
+
+              data: {
+
+                type:
+                  "STATUS_CHANGE",
+
+                applicationNumber:
+                  String(
+                    applicationNumber
+                  ),
+
+                newStatus:
+                  String(
+                    newStatus
+                  ),
+
+                location:
+                  String(
+                    result.location
+                    || ""
+                  )
+
+              }
+
+            };
+
+
+            await messaging.send(
+              message
+            );
+
+          }
+
+
+          // ==========================================
+          // Update Firebase application
           // ==========================================
 
           async function updateApplication(
@@ -664,39 +818,32 @@ jobs:
               + application.applicationId;
 
 
-            const now =
-              Date.now();
-
-
-            const updates = {
-
-              currentStatus:
-                result.status
-                || "",
-
-              location:
-                result.location
-                || "",
-
-              lastUpdate:
-                result.movedOn
-                || "",
-
-              updatedAt:
-                now
-
-            };
-
-
             await db
               .ref(path)
-              .update(updates);
+              .update({
+
+                currentStatus:
+                  result.status
+                  || "",
+
+                location:
+                  result.location
+                  || "",
+
+                lastUpdate:
+                  result.movedOn
+                  || "",
+
+                updatedAt:
+                  Date.now()
+
+              });
 
           }
 
 
           // ==========================================
-          // Update Last Checked Time
+          // Last checked
           // ==========================================
 
           async function updateLastChecked(
@@ -722,7 +869,7 @@ jobs:
 
 
           // ==========================================
-          // Extract Application Data
+          // Extract SOAP data
           // ==========================================
 
           function extractApplicationData(
@@ -741,10 +888,6 @@ jobs:
 
             const normalized = {};
 
-
-            // ========================================
-            // Direct Fields
-            // ========================================
 
             for (
               const key
@@ -859,10 +1002,6 @@ jobs:
             }
 
 
-            // ========================================
-            // Search Nested Objects
-            // ========================================
-
             for (
               const key
               of Object.keys(value)
@@ -939,7 +1078,7 @@ jobs:
 
 
           // ==========================================
-          // Normalize Status
+          // Normalize status
           // ==========================================
 
           function normalizeStatus(
@@ -970,7 +1109,7 @@ jobs:
 
 
           // ==========================================
-          // XML Escape
+          // XML escape
           // ==========================================
 
           function escapeXml(
@@ -1005,7 +1144,7 @@ jobs:
 
 
           // ==========================================
-          // Start Monitor
+          // Start
           // ==========================================
 
           main()
@@ -1016,7 +1155,6 @@ jobs:
                 console.log(
                   "Node.js process completed successfully."
                 );
-
 
                 process.exit(
                   0
@@ -1032,21 +1170,17 @@ jobs:
                   "=========================================="
                 );
 
-
                 console.error(
                   "Monitoring FAILED"
                 );
-
 
                 console.error(
                   "=========================================="
                 );
 
-
                 console.error(
                   error.message
                 );
-
 
                 process.exit(
                   1
