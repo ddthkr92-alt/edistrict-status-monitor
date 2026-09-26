@@ -1,7 +1,21 @@
 name: eDistrict Status Monitor
 
 on:
+
+  # Manual run भी उपलब्ध रहेगा
   workflow_dispatch:
+
+  # हर 5 मिनट में automatic monitoring
+  schedule:
+    - cron: "*/5 * * * *"
+      timezone: "Asia/Kolkata"
+
+
+# एक समय में monitoring के overlapping runs रोकें
+concurrency:
+  group: edistrict-status-monitor
+  cancel-in-progress: false
+
 
 jobs:
 
@@ -20,32 +34,36 @@ jobs:
 
 
       # ==========================================
-      # 2. Node.js
+      # 2. Setup Node.js
       # ==========================================
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
+
         with:
           node-version: 22
 
 
       # ==========================================
-      # 3. Dependencies
+      # 3. Install dependencies
       # ==========================================
 
       - name: Install dependencies
         run: |
+
           npm init -y
+
           npm install firebase-admin fast-xml-parser
 
 
       # ==========================================
-      # 4. Monitor + FCM
+      # 4. Monitor e-District applications
       # ==========================================
 
       - name: Monitor e-District applications
 
         env:
+
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
 
         run: |
@@ -254,12 +272,6 @@ jobs:
                       application.applicationNumber
                     ),
 
-                  applicantName:
-                    String(
-                      application.applicantName
-                      || ""
-                    ),
-
                   service:
                     String(
                       application.service
@@ -421,17 +433,16 @@ jobs:
                 );
 
 
-                // ==================================
-                // Send notification only when
-                // this status was not notified before
-                // ==================================
-
                 const alreadyNotified =
                   normalizeStatus(
                     application.lastNotifiedStatus
                   )
                   === newStatus;
 
+
+                // ==================================
+                // FCM Notification
+                // ==================================
 
                 if (
                   !alreadyNotified
@@ -448,7 +459,6 @@ jobs:
                   notificationCount++;
 
 
-                  // Save notified status
                   await db
                     .ref(
                       "users/"
@@ -466,6 +476,7 @@ jobs:
                     "FCM notification sent successfully."
                   );
 
+
                 } else if (
                   alreadyNotified
                 ) {
@@ -473,6 +484,7 @@ jobs:
                   console.log(
                     "Notification already sent for this status."
                   );
+
 
                 } else {
 
@@ -484,7 +496,7 @@ jobs:
 
 
                 // ==================================
-                // Update application
+                // Update Firebase
                 // ==================================
 
                 await updateApplication(
@@ -503,6 +515,7 @@ jobs:
                 console.log(
                   "Firebase application data updated."
                 );
+
 
               } catch (error) {
 
@@ -747,10 +760,6 @@ jobs:
               || "e-District आवेदन";
 
 
-            const applicationNumber =
-              application.applicationNumber;
-
-
             const message = {
 
               token:
@@ -775,7 +784,7 @@ jobs:
 
                 applicationNumber:
                   String(
-                    applicationNumber
+                    application.applicationNumber
                   ),
 
                 newStatus:
