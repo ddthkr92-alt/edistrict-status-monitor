@@ -2,16 +2,13 @@ name: eDistrict Status Monitor
 
 on:
 
-  # Manual run भी उपलब्ध रहेगा
   workflow_dispatch:
 
-  # हर 5 मिनट में automatic monitoring
   schedule:
     - cron: "*/5 * * * *"
       timezone: "Asia/Kolkata"
 
 
-# एक समय में एक ही monitoring run चले
 concurrency:
   group: edistrict-status-monitor
   cancel-in-progress: false
@@ -54,12 +51,41 @@ jobs:
 
 
       # ========================================================
-      # Run e-District monitor
+      # e-District API connectivity test
+      # ========================================================
+
+      - name: Test e-District API connectivity
+        run: |
+
+          echo "========================================"
+          echo "e-District API Connectivity Test"
+          echo "========================================"
+
+          echo ""
+          echo "Testing endpoint..."
+
+          curl \
+            --verbose \
+            --connect-timeout 15 \
+            --max-time 30 \
+            "http://164.100.181.28/nichqreport/responseup.asmx" \
+            -o /tmp/edistrict_response.txt \
+            2>&1 || true
+
+          echo ""
+          echo "========================================"
+          echo "Connectivity test completed"
+          echo "========================================"
+
+
+      # ========================================================
+      # Monitor applications
       # ========================================================
 
       - name: Monitor e-District applications
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+
         run: |
 
           cat > monitor.js <<'EOF'
@@ -195,10 +221,127 @@ jobs:
 
 
           // ======================================================
-          // e-District API call
+          // Delay helper
           // ======================================================
 
-          async function checkEDistrictStatus(
+          function sleep(
+            milliseconds
+          ) {
+
+            return new Promise(
+              resolve =>
+                setTimeout(
+                  resolve,
+                  milliseconds
+                )
+            );
+          }
+
+
+          // ======================================================
+          // Detailed error information
+          // ======================================================
+
+          function logNetworkError(
+            error,
+            attempt,
+            applicationNumber
+          ) {
+
+            console.error(
+              "----------------------------------------"
+            );
+
+            console.error(
+              "e-District request failed"
+            );
+
+            console.error(
+              "Application:",
+              applicationNumber
+            );
+
+            console.error(
+              "Attempt:",
+              attempt
+            );
+
+            console.error(
+              "Error name:",
+              error?.name || ""
+            );
+
+            console.error(
+              "Error message:",
+              error?.message || ""
+            );
+
+            console.error(
+              "Error code:",
+              error?.code || ""
+            );
+
+            console.error(
+              "Error errno:",
+              error?.errno || ""
+            );
+
+            console.error(
+              "Error type:",
+              error?.type || ""
+            );
+
+            if (
+              error?.cause
+            ) {
+
+              console.error(
+                "Cause name:",
+                error.cause.name || ""
+              );
+
+              console.error(
+                "Cause message:",
+                error.cause.message || ""
+              );
+
+              console.error(
+                "Cause code:",
+                error.cause.code || ""
+              );
+
+              console.error(
+                "Cause errno:",
+                error.cause.errno || ""
+              );
+
+              console.error(
+                "Cause syscall:",
+                error.cause.syscall || ""
+              );
+
+              console.error(
+                "Cause address:",
+                error.cause.address || ""
+              );
+
+              console.error(
+                "Cause port:",
+                error.cause.port || ""
+              );
+            }
+
+            console.error(
+              "----------------------------------------"
+            );
+          }
+
+
+          // ======================================================
+          // Single e-District API request
+          // ======================================================
+
+          async function checkEDistrictStatusOnce(
             applicationNumber
           ) {
 
@@ -230,7 +373,8 @@ jobs:
                 SOAP_ADDRESS,
                 {
 
-                  method: "POST",
+                  method:
+                    "POST",
 
                   headers: {
 
@@ -238,7 +382,12 @@ jobs:
                       "text/xml; charset=utf-8",
 
                     "SOAPAction":
-                      `"${SOAP_ACTION}"`
+                      `"${SOAP_ACTION}"`,
+
+                    "Content-Length":
+                      Buffer.byteLength(
+                        soapBody
+                      ).toString()
 
                   },
 
@@ -259,7 +408,7 @@ jobs:
             ) {
 
               throw new Error(
-                `e-District HTTP error: ${response.status}`
+                `e-District HTTP error: ${response.status} ${response.statusText}`
               );
             }
 
@@ -268,11 +417,26 @@ jobs:
               await response.text();
 
 
+            if (
+              !xml
+                  ||
+              xml.trim().length === 0
+            ) {
+
+              throw new Error(
+                "e-District response खाली है।"
+              );
+            }
+
+
             const parser =
               new XMLParser(
                 {
-                  ignoreAttributes: false,
-                  removeNSPrefix: true
+                  ignoreAttributes:
+                    false,
+
+                  removeNSPrefix:
+                    true
                 }
               );
 
@@ -290,28 +454,36 @@ jobs:
 
 
             const body =
-              envelope
-                  ?.Body
+              envelope?.Body
                   ||
               parsed.Body;
 
 
             const responseObject =
-              body
-                  ?.retAppStatusResponse;
+              body?.retAppStatusResponse;
 
 
             const resultObject =
-              responseObject
-                  ?.retAppStatusResult;
+              responseObject?.retAppStatusResult;
 
 
             if (
               !resultObject
             ) {
 
+              console.error(
+                "e-District XML response:"
+              );
+
+              console.error(
+                xml.substring(
+                  0,
+                  3000
+                )
+              );
+
               throw new Error(
-                "e-District response में result नहीं मिला।"
+                "e-District response में retAppStatusResult नहीं मिला।"
               );
             }
 
@@ -353,7 +525,94 @@ jobs:
 
 
           // ======================================================
-          // Send FCM status-change notification
+          // e-District API request with retry
+          // ======================================================
+
+          async function checkEDistrictStatus(
+            applicationNumber
+          ) {
+
+            const maxAttempts =
+              3;
+
+
+            let lastError =
+              null;
+
+
+            for (
+              let attempt = 1;
+              attempt <= maxAttempts;
+              attempt++
+            ) {
+
+              try {
+
+                console.log(
+                  `Checking e-District status. Attempt ${attempt}/${maxAttempts}`
+                );
+
+
+                const result =
+                  await checkEDistrictStatusOnce(
+                    applicationNumber
+                  );
+
+
+                console.log(
+                  "e-District API request successful."
+                );
+
+
+                return result;
+
+              }
+
+              catch (error) {
+
+                lastError =
+                  error;
+
+
+                logNetworkError(
+                  error,
+                  attempt,
+                  applicationNumber
+                );
+
+
+                if (
+                  attempt <
+                  maxAttempts
+                ) {
+
+                  const delay =
+                    attempt * 5000;
+
+
+                  console.log(
+                    `Retrying after ${delay / 1000} seconds...`
+                  );
+
+
+                  await sleep(
+                    delay
+                  );
+                }
+              }
+            }
+
+
+            throw lastError
+              ||
+              new Error(
+                "e-District API request failed."
+              );
+          }
+
+
+          // ======================================================
+          // Send FCM data-only notification
           // ======================================================
 
           async function sendStatusChangeNotification(
@@ -434,8 +693,9 @@ jobs:
 
               return true;
 
+            }
 
-            } catch (error) {
+            catch (error) {
 
               console.error(
                 "FCM notification failed."
@@ -443,6 +703,7 @@ jobs:
 
 
               console.error(
+                "FCM error:",
                 error.message
               );
 
@@ -575,6 +836,16 @@ jobs:
 
                 try {
 
+                  console.log(
+                    "----------------------------------------"
+                  );
+
+                  console.log(
+                    "Checking application:",
+                    applicationNumber
+                  );
+
+
                   const result =
                     await checkEDistrictStatus(
                       applicationNumber
@@ -628,13 +899,28 @@ jobs:
                   const shouldNotify =
                     statusChanged
                         &&
-                    newNormalized
-                        !==
+                    newNormalized !==
                     previousNotifiedNormalized;
 
 
                   const now =
                     Date.now();
+
+
+                  console.log(
+                    "Old status:",
+                    oldStatus
+                  );
+
+                  console.log(
+                    "New status:",
+                    newStatus
+                  );
+
+                  console.log(
+                    "Status changed:",
+                    statusChanged
+                  );
 
 
                   // =================================================
@@ -681,10 +967,6 @@ jobs:
                   );
 
 
-                  // -------------------------------------------------
-                  // Send notification
-                  // -------------------------------------------------
-
                   if (
                     shouldNotify
                         &&
@@ -707,9 +989,6 @@ jobs:
 
                       notificationCount++;
 
-
-                      // Save only the last notified status.
-                      // This allows A → B → A to notify again.
 
                       await database
                         .ref(
@@ -738,7 +1017,7 @@ jobs:
 
 
                   // =================================================
-                  // Save latest e-District status
+                  // Save latest status
                   // =================================================
 
                   await database
@@ -767,7 +1046,6 @@ jobs:
                     );
                 }
 
-
                 catch (error) {
 
                   failedApplications++;
@@ -779,7 +1057,14 @@ jobs:
 
 
                   console.error(
-                    error.message
+                    "Application:",
+                    applicationNumber
+                  );
+
+
+                  console.error(
+                    "Error:",
+                    error?.message || error
                   );
                 }
               }
