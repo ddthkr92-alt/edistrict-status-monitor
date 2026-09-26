@@ -4,12 +4,363 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  test-firebase:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test workflow
+
+      # ==========================================
+      # Step 1 - Checkout repository
+      # ==========================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ==========================================
+      # Step 2 - Setup Node.js
+      # ==========================================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+
+      # ==========================================
+      # Step 3 - Install Firebase Admin SDK
+      # ==========================================
+      - name: Install Firebase Admin SDK
         run: |
-          echo "eDistrict Status Monitor"
-          echo "GitHub Actions is working successfully."
-          date
+          npm init -y
+          npm install firebase-admin
+
+
+      # ==========================================
+      # Step 4 - Test Firebase Realtime Database
+      # ==========================================
+      - name: Test Firebase Realtime Database
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+
+          cat > test-firebase.js <<'EOF'
+
+          const {
+            initializeApp,
+            cert
+          } = require("firebase-admin/app");
+
+          const {
+            getDatabase
+          } = require("firebase-admin/database");
+
+
+          const DATABASE_URL =
+            "https://edistrict-status-test-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+
+          console.log(
+            "=========================================="
+          );
+
+          console.log(
+            "eDistrict Firebase Monitor"
+          );
+
+          console.log(
+            "=========================================="
+          );
+
+
+          // ------------------------------------------
+          // Check Secret
+          // ------------------------------------------
+
+          if (
+            !process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+          ) {
+
+            console.error(
+              "ERROR: Firebase service account secret is missing."
+            );
+
+            process.exit(1);
+          }
+
+
+          console.log(
+            "Firebase service account secret detected."
+          );
+
+
+          // ------------------------------------------
+          // Parse Service Account
+          // ------------------------------------------
+
+          let serviceAccount;
+
+          try {
+
+            serviceAccount =
+              JSON.parse(
+                process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+              );
+
+          } catch (error) {
+
+            console.error(
+              "ERROR: Firebase service account JSON is invalid."
+            );
+
+            process.exit(1);
+          }
+
+
+          // ------------------------------------------
+          // Initialize Firebase Admin
+          // ------------------------------------------
+
+          try {
+
+            initializeApp({
+              credential:
+                cert(serviceAccount),
+
+              databaseURL:
+                DATABASE_URL
+            });
+
+          } catch (error) {
+
+            console.error(
+              "ERROR: Firebase Admin initialization failed."
+            );
+
+            console.error(
+              error.message
+            );
+
+            process.exit(1);
+          }
+
+
+          console.log(
+            "Firebase Admin initialized successfully."
+          );
+
+
+          console.log(
+            "Database URL:"
+          );
+
+          console.log(
+            DATABASE_URL
+          );
+
+
+          // ------------------------------------------
+          // Read Firebase Database
+          // ------------------------------------------
+
+          async function testDatabase() {
+
+            try {
+
+              const db =
+                getDatabase();
+
+
+              const snapshot =
+                await db
+                  .ref("users")
+                  .once("value");
+
+
+              console.log(
+                "=========================================="
+              );
+
+              console.log(
+                "Firebase Database connection SUCCESS"
+              );
+
+              console.log(
+                "=========================================="
+              );
+
+
+              if (!snapshot.exists()) {
+
+                console.log(
+                  "No users found in Firebase Database."
+                );
+
+                return;
+              }
+
+
+              const users =
+                snapshot.val();
+
+
+              const userIds =
+                Object.keys(users);
+
+
+              console.log(
+                "Users found: "
+                  + userIds.length
+              );
+
+
+              for (
+                const uid of userIds
+              ) {
+
+                console.log(
+                  "------------------------------------------"
+                );
+
+                console.log(
+                  "User UID: "
+                    + uid
+                );
+
+
+                const user =
+                  users[uid];
+
+
+                if (
+                  user.applications
+                ) {
+
+                  const applicationIds =
+                    Object.keys(
+                      user.applications
+                    );
+
+
+                  console.log(
+                    "Applications: "
+                      + applicationIds.length
+                  );
+
+
+                  for (
+                    const applicationId
+                    of applicationIds
+                  ) {
+
+                    const application =
+                      user.applications[
+                        applicationId
+                      ];
+
+
+                    console.log(
+                      "Application: "
+                        + (
+                          application.applicationNumber
+                          || applicationId
+                        )
+                    );
+
+
+                    console.log(
+                      "Applicant: "
+                        + (
+                          application.applicantName
+                          || "-"
+                        )
+                    );
+
+
+                    console.log(
+                      "Service: "
+                        + (
+                          application.service
+                          || "-"
+                        )
+                    );
+
+
+                    console.log(
+                      "Current Status: "
+                        + (
+                          application.currentStatus
+                          || "-"
+                        )
+                    );
+
+
+                    console.log(
+                      "Location: "
+                        + (
+                          application.location
+                          || "-"
+                        )
+                    );
+
+
+                    console.log(
+                      "Last Update: "
+                        + (
+                          application.lastUpdate
+                          || "-"
+                        )
+                    );
+                  }
+
+                } else {
+
+                  console.log(
+                    "Applications: 0"
+                  );
+                }
+              }
+
+
+              console.log(
+                "=========================================="
+              );
+
+              console.log(
+                "Firebase test completed successfully."
+              );
+
+              console.log(
+                "=========================================="
+              );
+
+
+            } catch (error) {
+
+              console.error(
+                "=========================================="
+              );
+
+              console.error(
+                "Firebase Database connection FAILED"
+              );
+
+              console.error(
+                "=========================================="
+              );
+
+
+              console.error(
+                error.message
+              );
+
+
+              process.exit(1);
+            }
+          }
+
+
+          testDatabase();
+
+          EOF
+
+
+          node test-firebase.js
