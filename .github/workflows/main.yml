@@ -11,7 +11,7 @@ on:
       timezone: "Asia/Kolkata"
 
 
-# एक समय में monitoring के overlapping runs रोकें
+# एक समय में एक ही monitoring run चले
 concurrency:
   group: edistrict-status-monitor
   cancel-in-progress: false
@@ -25,83 +25,118 @@ jobs:
 
     steps:
 
-      # ==========================================
-      # 1. Checkout
-      # ==========================================
+      # ========================================================
+      # Checkout
+      # ========================================================
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ==========================================
-      # 2. Setup Node.js
-      # ==========================================
+      # ========================================================
+      # Node.js
+      # ========================================================
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
-
         with:
-          node-version: 22
+          node-version: 20
 
 
-      # ==========================================
-      # 3. Install dependencies
-      # ==========================================
+      # ========================================================
+      # Install dependencies
+      # ========================================================
 
       - name: Install dependencies
         run: |
-
           npm init -y
-
           npm install firebase-admin fast-xml-parser
 
 
-      # ==========================================
-      # 4. Monitor e-District applications
-      # ==========================================
+      # ========================================================
+      # Run e-District monitor
+      # ========================================================
 
       - name: Monitor e-District applications
-
         env:
-
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-
         run: |
 
-          cat > monitor-edistrict.js <<'EOF'
+          cat > monitor.js <<'EOF'
 
-          const {
-            initializeApp,
-            cert
-          } = require("firebase-admin/app");
-
-
-          const {
-            getDatabase
-          } = require("firebase-admin/database");
-
-
-          const {
-            getMessaging
-          } = require("firebase-admin/messaging");
-
+          const admin =
+            require("firebase-admin");
 
           const {
             XMLParser
-          } = require("fast-xml-parser");
+          } =
+            require("fast-xml-parser");
 
 
-          // ==========================================
+          // ======================================================
           // Firebase
-          // ==========================================
+          // ======================================================
 
           const DATABASE_URL =
             "https://edistrict-status-test-default-rtdb.asia-southeast1.firebasedatabase.app";
 
 
-          // ==========================================
-          // e-District API
-          // ==========================================
+          if (
+            !process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+          ) {
+
+            console.error(
+              "FIREBASE_SERVICE_ACCOUNT_JSON secret नहीं मिला।"
+            );
+
+            process.exit(1);
+          }
+
+
+          let serviceAccount;
+
+
+          try {
+
+            serviceAccount =
+              JSON.parse(
+                process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+              );
+
+          } catch (error) {
+
+            console.error(
+              "Firebase service account JSON invalid है।"
+            );
+
+            process.exit(1);
+          }
+
+
+          admin.initializeApp({
+
+            credential:
+              admin.credential.cert(
+                serviceAccount
+              ),
+
+            databaseURL:
+              DATABASE_URL
+
+          });
+
+
+          const database =
+            admin.database();
+
+
+          const messaging =
+            admin.messaging();
+
+
+          // ======================================================
+          // e-District SOAP API
+          // ======================================================
 
           const SOAP_ADDRESS =
             "http://164.100.181.28/nichqreport/responseup.asmx";
@@ -115,518 +150,79 @@ jobs:
             "http://tempuri.org/";
 
 
-          // ==========================================
-          // Main
-          // ==========================================
-
-          async function main() {
-
-            console.log(
-              "=========================================="
-            );
-
-            console.log(
-              "eDistrict Status Monitor + FCM"
-            );
-
-            console.log(
-              "=========================================="
-            );
+          const OPERATION_NAME =
+            "retAppStatus";
 
 
-            // ========================================
-            // Secret
-            // ========================================
+          // ======================================================
+          // Helpers
+          // ======================================================
+
+          function safe(
+            value
+          ) {
 
             if (
-              !process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+              value === null
+                  ||
+              value === undefined
             ) {
 
-              throw new Error(
-                "Firebase service account secret is missing."
-              );
-
+              return "";
             }
 
 
-            const serviceAccount =
-              JSON.parse(
-                process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-              );
-
-
-            // ========================================
-            // Firebase Admin
-            // ========================================
-
-            initializeApp({
-
-              credential:
-                cert(serviceAccount),
-
-              databaseURL:
-                DATABASE_URL
-
-            });
-
-
-            const db =
-              getDatabase();
-
-
-            const messaging =
-              getMessaging();
-
-
-            console.log(
-              "Firebase Admin initialized successfully."
-            );
-
-
-            // ========================================
-            // Read users
-            // ========================================
-
-            const usersSnapshot =
-              await db
-                .ref("users")
-                .once("value");
-
-
-            if (
-              !usersSnapshot.exists()
-            ) {
-
-              console.log(
-                "No users found."
-              );
-
-              return;
-
-            }
-
-
-            const users =
-              usersSnapshot.val();
-
-
-            const applications = [];
-
-
-            // ========================================
-            // Collect applications
-            // ========================================
-
-            for (
-              const uid
-              of Object.keys(users)
-            ) {
-
-              const user =
-                users[uid];
-
-
-              if (
-                !user
-                || !user.applications
-              ) {
-
-                continue;
-
-              }
-
-
-              for (
-                const applicationId
-                of Object.keys(
-                  user.applications
-                )
-              ) {
-
-                const application =
-                  user.applications[
-                    applicationId
-                  ];
-
-
-                if (
-                  !application
-                  || !application.applicationNumber
-                ) {
-
-                  continue;
-
-                }
-
-
-                applications.push({
-
-                  uid:
-                    uid,
-
-                  applicationId:
-                    applicationId,
-
-                  applicationNumber:
-                    String(
-                      application.applicationNumber
-                    ),
-
-                  service:
-                    String(
-                      application.service
-                      || ""
-                    ),
-
-                  currentStatus:
-                    String(
-                      application.currentStatus
-                      || ""
-                    ),
-
-                  lastNotifiedStatus:
-                    String(
-                      application.lastNotifiedStatus
-                      || ""
-                    ),
-
-                  fcmToken:
-                    String(
-                      user.fcmToken
-                      || ""
-                    )
-
-                });
-
-              }
-
-            }
-
-
-            console.log(
-              "Applications found: "
-                + applications.length
-            );
-
-
-            if (
-              applications.length === 0
-            ) {
-
-              return;
-
-            }
-
-
-            // ========================================
-            // XML parser
-            // ========================================
-
-            const parser =
-              new XMLParser({
-
-                ignoreAttributes:
-                  true,
-
-                removeNSPrefix:
-                  true,
-
-                trimValues:
-                  true
-
-              });
-
-
-            // ========================================
-            // Counters
-            // ========================================
-
-            let checkedCount =
-              0;
-
-
-            let unchangedCount =
-              0;
-
-
-            let changedCount =
-              0;
-
-
-            let notificationCount =
-              0;
-
-
-            let failedCount =
-              0;
-
-
-            // ========================================
-            // Monitor applications
-            // ========================================
-
-            for (
-              const application
-              of applications
-            ) {
-
-              try {
-
-                const result =
-                  await checkEdistrictStatus(
-                    application.applicationNumber,
-                    parser
-                  );
-
-
-                checkedCount++;
-
-
-                const oldStatus =
-                  normalizeStatus(
-                    application.currentStatus
-                  );
-
-
-                const newStatus =
-                  normalizeStatus(
-                    result.status
-                  );
-
-
-                // ==================================
-                // No status change
-                // ==================================
-
-                if (
-                  oldStatus === newStatus
-                ) {
-
-                  unchangedCount++;
-
-
-                  console.log(
-                    "Application checked: STATUS UNCHANGED"
-                  );
-
-
-                  await updateLastChecked(
-                    db,
-                    application
-                  );
-
-
-                  continue;
-
-                }
-
-
-                // ==================================
-                // Status changed
-                // ==================================
-
-                changedCount++;
-
-
-                console.log(
-                  "Application checked: STATUS CHANGED"
-                );
-
-
-                const alreadyNotified =
-                  normalizeStatus(
-                    application.lastNotifiedStatus
-                  )
-                  === newStatus;
-
-
-                // ==================================
-                // FCM Notification
-                // ==================================
-
-                if (
-                  !alreadyNotified
-                  && application.fcmToken
-                ) {
-
-                  await sendStatusNotification(
-                    messaging,
-                    application,
-                    result
-                  );
-
-
-                  notificationCount++;
-
-
-                  await db
-                    .ref(
-                      "users/"
-                      + application.uid
-                      + "/applications/"
-                      + application.applicationId
-                      + "/lastNotifiedStatus"
-                    )
-                    .set(
-                      newStatus
-                    );
-
-
-                  console.log(
-                    "FCM notification sent successfully."
-                  );
-
-
-                } else if (
-                  alreadyNotified
-                ) {
-
-                  console.log(
-                    "Notification already sent for this status."
-                  );
-
-
-                } else {
-
-                  console.log(
-                    "FCM token not available."
-                  );
-
-                }
-
-
-                // ==================================
-                // Update Firebase
-                // ==================================
-
-                await updateApplication(
-                  db,
-                  application,
-                  result
-                );
-
-
-                await updateLastChecked(
-                  db,
-                  application
-                );
-
-
-                console.log(
-                  "Firebase application data updated."
-                );
-
-
-              } catch (error) {
-
-                failedCount++;
-
-
-                console.error(
-                  "Application check failed:"
-                );
-
-
-                console.error(
-                  error.message
-                );
-
-              }
-
-            }
-
-
-            // ========================================
-            // Summary
-            // ========================================
-
-            console.log(
-              "=========================================="
-            );
-
-
-            console.log(
-              "Monitoring completed."
-            );
-
-
-            console.log(
-              "Applications checked: "
-                + checkedCount
-            );
-
-
-            console.log(
-              "Status unchanged: "
-                + unchangedCount
-            );
-
-
-            console.log(
-              "Status changed: "
-                + changedCount
-            );
-
-
-            console.log(
-              "Notifications sent: "
-                + notificationCount
-            );
-
-
-            console.log(
-              "Failed checks: "
-                + failedCount
-            );
-
-
-            console.log(
-              "=========================================="
-            );
-
+            return String(
+              value
+            ).trim();
           }
 
 
-          // ==========================================
-          // e-District SOAP request
-          // ==========================================
+          function normalizeStatus(
+            value
+          ) {
 
-          async function checkEdistrictStatus(
-            applicationNumber,
-            parser
+            return safe(
+              value
+            )
+              .replace(
+                /\s+/g,
+                " "
+              )
+              .trim()
+              .toLowerCase();
+          }
+
+
+          // ======================================================
+          // e-District API call
+          // ======================================================
+
+          async function checkEDistrictStatus(
+            applicationNumber
           ) {
 
             const soapBody =
+              `<?xml version="1.0" encoding="utf-8"?>
+          <soap:Envelope
+              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+              xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+              xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
 
-              '<?xml version="1.0" encoding="utf-8"?>'
-              +
-              '<soap:Envelope '
-              +
-              'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-              +
-              'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
-              +
-              'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
-              +
-              '<soap:Body>'
-              +
-              '<retAppStatus xmlns="'
-              + NAMESPACE
-              + '">'
-              +
-              '<application_no>'
-              +
-              escapeXml(
-                applicationNumber
-              )
-              +
-              '</application_no>'
-              +
-              '</retAppStatus>'
-              +
-              '</soap:Body>'
-              +
-              '</soap:Envelope>';
+              <soap:Body>
+
+                <${OPERATION_NAME}
+                    xmlns="${NAMESPACE}">
+
+                  <application_no>
+                    ${applicationNumber}
+                  </application_no>
+
+                </${OPERATION_NAME}>
+
+              </soap:Body>
+
+          </soap:Envelope>`;
 
 
             const response =
@@ -634,8 +230,7 @@ jobs:
                 SOAP_ADDRESS,
                 {
 
-                  method:
-                    "POST",
+                  method: "POST",
 
                   headers: {
 
@@ -643,12 +238,17 @@ jobs:
                       "text/xml; charset=utf-8",
 
                     "SOAPAction":
-                      '"' + SOAP_ACTION + '"'
+                      `"${SOAP_ACTION}"`
 
                   },
 
                   body:
-                    soapBody
+                    soapBody,
+
+                  signal:
+                    AbortSignal.timeout(
+                      30000
+                    )
 
                 }
               );
@@ -659,10 +259,8 @@ jobs:
             ) {
 
               throw new Error(
-                "e-District API HTTP error: "
-                  + response.status
+                `e-District HTTP error: ${response.status}`
               );
-
             }
 
 
@@ -670,16 +268,13 @@ jobs:
               await response.text();
 
 
-            if (
-              !xml
-              || !xml.trim()
-            ) {
-
-              throw new Error(
-                "e-District API returned empty response."
+            const parser =
+              new XMLParser(
+                {
+                  ignoreAttributes: false,
+                  removeNSPrefix: true
+                }
               );
-
-            }
 
 
             const parsed =
@@ -688,94 +283,103 @@ jobs:
               );
 
 
-            const result =
-              extractApplicationData(
-                parsed
-              );
+            const envelope =
+              parsed.Envelope
+                  ||
+              parsed["soap:Envelope"];
+
+
+            const body =
+              envelope
+                  ?.Body
+                  ||
+              parsed.Body;
+
+
+            const responseObject =
+              body
+                  ?.retAppStatusResponse;
+
+
+            const resultObject =
+              responseObject
+                  ?.retAppStatusResult;
 
 
             if (
-              !result.status
-              && !result.name
-              && !result.service
+              !resultObject
             ) {
 
               throw new Error(
-                "Application data could not be parsed."
+                "e-District response में result नहीं मिला।"
               );
-
             }
 
 
             return {
 
               name:
-                result.name
-                || "",
+                safe(
+                  resultObject.name
+                ),
 
               status:
-                result.status
-                || "",
+                safe(
+                  resultObject.status
+                ),
 
               location:
-                result.location
-                || "",
+                safe(
+                  resultObject.location
+                ),
 
               movedOn:
-                result.movedon
-                || result.movedOn
-                || "",
+                safe(
+                  resultObject.movedon
+                ),
 
-              certificateDownload:
-                result.ic_download
-                || "",
+              download:
+                safe(
+                  resultObject.ic_download
+                ),
 
               service:
-                result.service
-                || ""
+                safe(
+                  resultObject.service
+                )
 
             };
-
           }
 
 
-          // ==========================================
-          // Send FCM notification
-          // ==========================================
+          // ======================================================
+          // Send FCM status-change notification
+          // ======================================================
 
-          async function sendStatusNotification(
-            messaging,
-            application,
-            result
+          async function sendStatusChangeNotification(
+            fcmToken,
+            applicationNumber,
+            service,
+            newStatus,
+            location
           ) {
 
-            const newStatus =
-              result.status
-              || "नई स्थिति उपलब्ध है";
+            if (
+              !fcmToken
+            ) {
 
+              console.log(
+                "FCM token उपलब्ध नहीं है।"
+              );
 
-            const service =
-              result.service
-              || application.service
-              || "e-District आवेदन";
+              return false;
+            }
 
 
             const message = {
 
               token:
-                application.fcmToken,
-
-              notification: {
-
-                title:
-                  "🔔 e-District Status बदला",
-
-                body:
-                  service
-                  + " • "
-                  + newStatus
-
-              },
+                fcmToken,
 
               data: {
 
@@ -783,387 +387,474 @@ jobs:
                   "STATUS_CHANGE",
 
                 applicationNumber:
-                  String(
-                    application.applicationNumber
+                  safe(
+                    applicationNumber
                   ),
 
                 newStatus:
-                  String(
+                  safe(
                     newStatus
                   ),
 
                 location:
-                  String(
-                    result.location
-                    || ""
+                  safe(
+                    location
                   )
+
+              },
+
+              android: {
+
+                priority:
+                  "high"
 
               }
 
             };
 
 
-            await messaging.send(
-              message
-            );
+            try {
 
-          }
-
-
-          // ==========================================
-          // Update Firebase application
-          // ==========================================
-
-          async function updateApplication(
-            db,
-            application,
-            result
-          ) {
-
-            const path =
-              "users/"
-              + application.uid
-              + "/applications/"
-              + application.applicationId;
+              const messageId =
+                await messaging.send(
+                  message
+                );
 
 
-            await db
-              .ref(path)
-              .update({
-
-                currentStatus:
-                  result.status
-                  || "",
-
-                location:
-                  result.location
-                  || "",
-
-                lastUpdate:
-                  result.movedOn
-                  || "",
-
-                updatedAt:
-                  Date.now()
-
-              });
-
-          }
-
-
-          // ==========================================
-          // Last checked
-          // ==========================================
-
-          async function updateLastChecked(
-            db,
-            application
-          ) {
-
-            const path =
-              "users/"
-              + application.uid
-              + "/applications/"
-              + application.applicationId
-              + "/lastCheckedAt";
-
-
-            await db
-              .ref(path)
-              .set(
-                Date.now()
+              console.log(
+                "FCM data-only notification sent successfully."
               );
 
+
+              console.log(
+                "Message ID:",
+                messageId
+              );
+
+
+              return true;
+
+
+            } catch (error) {
+
+              console.error(
+                "FCM notification failed."
+              );
+
+
+              console.error(
+                error.message
+              );
+
+
+              return false;
+            }
           }
 
 
-          // ==========================================
-          // Extract SOAP data
-          // ==========================================
+          // ======================================================
+          // Main monitor
+          // ======================================================
 
-          function extractApplicationData(
-            value
-          ) {
+          async function monitorApplications() {
 
-            if (
-              !value
-              || typeof value !== "object"
-            ) {
+            console.log(
+              "========================================"
+            );
 
-              return {};
+            console.log(
+              "e-District Status Monitor"
+            );
 
-            }
+            console.log(
+              "Started:",
+              new Date().toISOString()
+            );
+
+            console.log(
+              "========================================"
+            );
 
 
-            const normalized = {};
+            const usersSnapshot =
+              await database
+                .ref(
+                  "users"
+                )
+                .once(
+                  "value"
+                );
+
+
+            const users =
+              usersSnapshot.val()
+                  || {};
+
+
+            let totalApplications =
+              0;
+
+
+            let checkedApplications =
+              0;
+
+
+            let unchangedApplications =
+              0;
+
+
+            let changedApplications =
+              0;
+
+
+            let notificationCount =
+              0;
+
+
+            let failedApplications =
+              0;
 
 
             for (
-              const key
-              of Object.keys(value)
+              const uid
+              of Object.keys(
+                users
+              )
             ) {
 
-              const lowerKey =
-                key
-                  .toLowerCase()
-                  .replace(
-                    /[^a-z0-9_]/g,
-                    ""
-                  );
+              const user =
+                users[uid]
+                    || {};
 
 
-              if (
-                lowerKey === "name"
-                &&
-                typeof value[key] === "string"
-              ) {
-
-                normalized.name =
-                  value[key];
-
-              }
+              const fcmToken =
+                safe(
+                  user.fcmToken
+                );
 
 
-              if (
-                lowerKey === "status"
-                &&
-                typeof value[key] === "string"
-              ) {
-
-                normalized.status =
-                  value[key];
-
-              }
+              const applications =
+                user.applications
+                    || {};
 
 
-              if (
-                lowerKey === "location"
-                &&
-                typeof value[key] === "string"
-              ) {
-
-                normalized.location =
-                  value[key];
-
-              }
-
-
-              if (
-                (
-                  lowerKey === "movedon"
-                  ||
-                  lowerKey === "movedondate"
+              for (
+                const applicationId
+                of Object.keys(
+                  applications
                 )
-                &&
-                typeof value[key] === "string"
               ) {
 
-                normalized.movedon =
-                  value[key];
-
-              }
+                totalApplications++;
 
 
-              if (
-                (
-                  lowerKey === "service"
-                  ||
-                  lowerKey === "servicename"
-                )
-                &&
-                typeof value[key] === "string"
-              ) {
-
-                normalized.service =
-                  value[key];
-
-              }
+                const application =
+                  applications[
+                    applicationId
+                  ]
+                      || {};
 
 
-              if (
-                (
-                  lowerKey === "ic_download"
-                  ||
-                  lowerKey === "icdownload"
-                )
-                &&
-                typeof value[key] === "string"
-              ) {
-
-                normalized.ic_download =
-                  value[key];
-
-              }
-
-            }
-
-
-            if (
-              normalized.name
-              ||
-              normalized.status
-              ||
-              normalized.service
-            ) {
-
-              return normalized;
-
-            }
-
-
-            for (
-              const key
-              of Object.keys(value)
-            ) {
-
-              const child =
-                value[key];
-
-
-              if (
-                Array.isArray(child)
-              ) {
-
-                for (
-                  const item
-                  of child
-                ) {
-
-                  const found =
-                    extractApplicationData(
-                      item
-                    );
-
-
-                  if (
-                    found.name
-                    ||
-                    found.status
-                    ||
-                    found.service
-                  ) {
-
-                    return found;
-
-                  }
-
-                }
-
-              }
-
-
-              if (
-                child
-                &&
-                typeof child === "object"
-              ) {
-
-                const found =
-                  extractApplicationData(
-                    child
+                const applicationNumber =
+                  safe(
+                    application.applicationNumber
+                      ||
+                    applicationId
                   );
 
 
                 if (
-                  found.name
-                  ||
-                  found.status
-                  ||
-                  found.service
+                  !applicationNumber
                 ) {
 
-                  return found;
+                  failedApplications++;
 
+                  continue;
                 }
 
+
+                try {
+
+                  const result =
+                    await checkEDistrictStatus(
+                      applicationNumber
+                    );
+
+
+                  checkedApplications++;
+
+
+                  const oldStatus =
+                    safe(
+                      application.currentStatus
+                    );
+
+
+                  const newStatus =
+                    safe(
+                      result.status
+                    );
+
+
+                  const oldNormalized =
+                    normalizeStatus(
+                      oldStatus
+                    );
+
+
+                  const newNormalized =
+                    normalizeStatus(
+                      newStatus
+                    );
+
+
+                  const statusChanged =
+                    oldNormalized !==
+                    newNormalized;
+
+
+                  const previousNotifiedStatus =
+                    safe(
+                      application.lastNotifiedStatus
+                    );
+
+
+                  const previousNotifiedNormalized =
+                    normalizeStatus(
+                      previousNotifiedStatus
+                    );
+
+
+                  const shouldNotify =
+                    statusChanged
+                        &&
+                    newNormalized
+                        !==
+                    previousNotifiedNormalized;
+
+
+                  const now =
+                    Date.now();
+
+
+                  // =================================================
+                  // Status unchanged
+                  // =================================================
+
+                  if (
+                    !statusChanged
+                  ) {
+
+                    unchangedApplications++;
+
+
+                    await database
+                      .ref(
+                        `users/${uid}/applications/${applicationId}`
+                      )
+                      .update(
+                        {
+
+                          lastCheckedAt:
+                            now,
+
+                          updatedAt:
+                            now
+
+                        }
+                      );
+
+
+                    continue;
+                  }
+
+
+                  // =================================================
+                  // Status changed
+                  // =================================================
+
+                  changedApplications++;
+
+
+                  console.log(
+                    "Status change detected."
+                  );
+
+
+                  // -------------------------------------------------
+                  // Send notification
+                  // -------------------------------------------------
+
+                  if (
+                    shouldNotify
+                        &&
+                    fcmToken
+                  ) {
+
+                    const sent =
+                      await sendStatusChangeNotification(
+                        fcmToken,
+                        applicationNumber,
+                        result.service,
+                        newStatus,
+                        result.location
+                      );
+
+
+                    if (
+                      sent
+                    ) {
+
+                      notificationCount++;
+
+
+                      // Save only the last notified status.
+                      // This allows A → B → A to notify again.
+
+                      await database
+                        .ref(
+                          `users/${uid}/applications/${applicationId}`
+                        )
+                        .update(
+                          {
+
+                            lastNotifiedStatus:
+                              newStatus
+
+                          }
+                        );
+                    }
+
+                  } else if (
+                    shouldNotify
+                        &&
+                    !fcmToken
+                  ) {
+
+                    console.log(
+                      "Status changed but FCM token नहीं मिला।"
+                    );
+                  }
+
+
+                  // =================================================
+                  // Save latest e-District status
+                  // =================================================
+
+                  await database
+                    .ref(
+                      `users/${uid}/applications/${applicationId}`
+                    )
+                    .update(
+                      {
+
+                        currentStatus:
+                          newStatus,
+
+                        location:
+                          result.location,
+
+                        lastUpdate:
+                          result.movedOn,
+
+                        updatedAt:
+                          now,
+
+                        lastCheckedAt:
+                          now
+
+                      }
+                    );
+                }
+
+
+                catch (error) {
+
+                  failedApplications++;
+
+
+                  console.error(
+                    "Application check failed."
+                  );
+
+
+                  console.error(
+                    error.message
+                  );
+                }
               }
-
             }
 
 
-            return {};
+            // ======================================================
+            // Summary
+            // ======================================================
 
+            console.log(
+              "========================================"
+            );
+
+            console.log(
+              "Monitoring completed."
+            );
+
+
+            console.log(
+              "Total applications:",
+              totalApplications
+            );
+
+
+            console.log(
+              "Checked:",
+              checkedApplications
+            );
+
+
+            console.log(
+              "Unchanged:",
+              unchangedApplications
+            );
+
+
+            console.log(
+              "Status changed:",
+              changedApplications
+            );
+
+
+            console.log(
+              "Notifications sent:",
+              notificationCount
+            );
+
+
+            console.log(
+              "Failed:",
+              failedApplications
+            );
+
+
+            console.log(
+              "Completed:",
+              new Date().toISOString()
+            );
+
+
+            console.log(
+              "========================================"
+            );
           }
 
 
-          // ==========================================
-          // Normalize status
-          // ==========================================
+          // ======================================================
+          // Run
+          // ======================================================
 
-          function normalizeStatus(
-            value
-          ) {
-
-            if (
-              value === null
-              ||
-              value === undefined
-            ) {
-
-              return "";
-
-            }
-
-
-            return String(
-              value
-            )
-              .trim()
-              .replace(
-                /\s+/g,
-                " "
-              );
-
-          }
-
-
-          // ==========================================
-          // XML escape
-          // ==========================================
-
-          function escapeXml(
-            value
-          ) {
-
-            return String(
-              value
-            )
-              .replace(
-                /&/g,
-                "&amp;"
-              )
-              .replace(
-                /</g,
-                "&lt;"
-              )
-              .replace(
-                />/g,
-                "&gt;"
-              )
-              .replace(
-                /"/g,
-                "&quot;"
-              )
-              .replace(
-                /'/g,
-                "&apos;"
-              );
-
-          }
-
-
-          // ==========================================
-          // Start
-          // ==========================================
-
-          main()
+          monitorApplications()
 
             .then(
               () => {
-
-                console.log(
-                  "Node.js process completed successfully."
-                );
 
                 process.exit(
                   0
@@ -1173,32 +864,23 @@ jobs:
             )
 
             .catch(
-              (error) => {
+              error => {
 
                 console.error(
-                  "=========================================="
+                  "Monitoring failed."
                 );
 
                 console.error(
-                  "Monitoring FAILED"
-                );
-
-                console.error(
-                  "=========================================="
-                );
-
-                console.error(
-                  error.message
+                  error
                 );
 
                 process.exit(
                   1
                 );
-
               }
             );
 
           EOF
 
 
-          node monitor-edistrict.js
+          node monitor.js
